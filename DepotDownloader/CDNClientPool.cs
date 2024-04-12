@@ -47,7 +47,7 @@ namespace DepotDownloader
         {
             try
             {
-                var cdnServers = await this.steamSession.steamContent.GetServersForSteamPipe();
+                IReadOnlyCollection<Server> cdnServers = await this.steamSession.steamContent.GetServersForSteamPipe();
                 if (cdnServers != null)
                 {
                     return cdnServers;
@@ -63,7 +63,7 @@ namespace DepotDownloader
 
         private async Task ConnectionPoolMonitorAsync()
         {
-            var didPopulate = false;
+            bool didPopulate = false;
 
             while (!shutdownToken.IsCancellationRequested)
             {
@@ -72,7 +72,7 @@ namespace DepotDownloader
                 // We want the Steam session so we can take the CellID from the session and pass it through to the ContentServer Directory Service
                 if (availableServerEndpoints.Count < ServerEndpointMinimumSize && steamSession.steamClient.IsConnected)
                 {
-                    var servers = await FetchBootstrapServerListAsync().ConfigureAwait(false);
+                    IReadOnlyCollection<Server> servers = await FetchBootstrapServerListAsync().ConfigureAwait(false);
 
                     if (servers == null || servers.Count == 0)
                     {
@@ -82,23 +82,23 @@ namespace DepotDownloader
 
                     ProxyServer = servers.Where(x => x.UseAsProxy).FirstOrDefault();
 
-                    var weightedCdnServers = servers
+                    IOrderedEnumerable<(Server server, int penalty)> weightedCdnServers = servers
                         .Where(server =>
                         {
-                            var isEligibleForApp = server.AllowedAppIds.Length == 0 || server.AllowedAppIds.Contains(appId);
+                            bool isEligibleForApp = server.AllowedAppIds.Length == 0 || server.AllowedAppIds.Contains(appId);
                             return isEligibleForApp && (server.Type == "SteamCache" || server.Type == "CDN");
                         })
                         .Select(server =>
                         {
-                            AccountSettingsStore.Instance.ContentServerPenalty.TryGetValue(server.Host, out var penalty);
+                            AccountSettingsStore.Instance.ContentServerPenalty.TryGetValue(server.Host, out int penalty);
 
                             return (server, penalty);
                         })
                         .OrderBy(pair => pair.penalty).ThenBy(pair => pair.server.WeightedLoad);
 
-                    foreach (var (server, weight) in weightedCdnServers)
+                    foreach ((Server server, int weight) in weightedCdnServers)
                     {
-                        for (var i = 0; i < server.NumEntries; i++)
+                        for (int i = 0; i < server.NumEntries; i++)
                         {
                             availableServerEndpoints.Add(server);
                         }
@@ -126,7 +126,7 @@ namespace DepotDownloader
 
         public Server GetConnection(CancellationToken token)
         {
-            if (!activeConnectionPool.TryPop(out var connection))
+            if (!activeConnectionPool.TryPop(out Server connection))
             {
                 connection = BuildConnection(token);
             }

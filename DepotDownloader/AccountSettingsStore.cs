@@ -50,8 +50,8 @@ namespace DepotDownloader
             {
                 try
                 {
-                    using var fs = IsolatedStorage.OpenFile(filename, FileMode.Open, FileAccess.Read);
-                    using var ds = new DeflateStream(fs, CompressionMode.Decompress);
+                    using IsolatedStorageFileStream fs = IsolatedStorage.OpenFile(filename, FileMode.Open, FileAccess.Read);
+                    using DeflateStream ds = new DeflateStream(fs, CompressionMode.Decompress);
                     Instance = Serializer.Deserialize<AccountSettingsStore>(ds);
                 }
                 catch (IOException ex)
@@ -75,8 +75,8 @@ namespace DepotDownloader
 
             try
             {
-                using var fs = IsolatedStorage.OpenFile(Instance.FileName, FileMode.Create, FileAccess.Write);
-                using var ds = new DeflateStream(fs, CompressionMode.Compress);
+                using IsolatedStorageFileStream fs = IsolatedStorage.OpenFile(Instance.FileName, FileMode.Create, FileAccess.Write);
+                using DeflateStream ds = new DeflateStream(fs, CompressionMode.Compress);
                 Serializer.Serialize(ds, Instance);
             }
             catch (IOException ex)

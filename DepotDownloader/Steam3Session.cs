@@ -60,7 +60,7 @@ namespace DepotDownloader
             this.logonDetails = details;
             this.authenticatedUser = details.Username != null || ContentDownloader.Config.UseQrCode;
 
-            var clientConfiguration = SteamConfiguration.Create(config =>
+            SteamConfiguration clientConfiguration = SteamConfiguration.Create(config =>
                 config
                     .WithHttpClientFactory(HttpClientFactory.CreateHttpClient)
             );
@@ -70,7 +70,7 @@ namespace DepotDownloader
             this.steamUser = this.steamClient.GetHandler<SteamUser>();
             this.steamApps = this.steamClient.GetHandler<SteamApps>();
             this.steamCloud = this.steamClient.GetHandler<SteamCloud>();
-            var steamUnifiedMessages = this.steamClient.GetHandler<SteamUnifiedMessages>();
+            SteamUnifiedMessages steamUnifiedMessages = this.steamClient.GetHandler<SteamUnifiedMessages>();
             this.steamPublishedFile = steamUnifiedMessages.CreateService<IPublishedFile>();
             this.steamContent = this.steamClient.GetHandler<SteamContent>();
 
@@ -98,7 +98,7 @@ namespace DepotDownloader
                     submitter();
                 }
 
-                var seq = this.seq;
+                int seq = this.seq;
                 do
                 {
                     lock (steamLock)
@@ -126,7 +126,7 @@ namespace DepotDownloader
             if ((AppInfo.ContainsKey(appId) && !bForce) || bAborted)
                 return;
 
-            var completed = false;
+            bool completed = false;
             Action<SteamApps.PICSTokensCallback> cbMethodTokens = appTokens =>
             {
                 completed = true;
@@ -135,7 +135,7 @@ namespace DepotDownloader
                     Console.WriteLine("Insufficient privileges to get access token for app {0}", appId);
                 }
 
-                foreach (var token_dict in appTokens.AppTokens)
+                foreach (KeyValuePair<uint, ulong> token_dict in appTokens.AppTokens)
                 {
                     this.AppTokens[token_dict.Key] = token_dict.Value;
                 }
@@ -151,22 +151,22 @@ namespace DepotDownloader
             {
                 completed = !appInfo.ResponsePending;
 
-                foreach (var app_value in appInfo.Apps)
+                foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> app_value in appInfo.Apps)
                 {
-                    var app = app_value.Value;
+                    SteamApps.PICSProductInfoCallback.PICSProductInfo app = app_value.Value;
 
                     Console.WriteLine("Got AppInfo for {0}", app.ID);
                     AppInfo[app.ID] = app;
                 }
 
-                foreach (var app in appInfo.UnknownApps)
+                foreach (uint app in appInfo.UnknownApps)
                 {
                     AppInfo[app] = null;
                 }
             };
 
-            var request = new SteamApps.PICSRequest(appId);
-            if (AppTokens.TryGetValue(appId, out var token))
+            SteamApps.PICSRequest request = new SteamApps.PICSRequest(appId);
+            if (AppTokens.TryGetValue(appId, out ulong token))
             {
                 request.AccessToken = token;
             }
@@ -179,36 +179,36 @@ namespace DepotDownloader
 
         public void RequestPackageInfo(IEnumerable<uint> packageIds)
         {
-            var packages = packageIds.ToList();
+            List<uint> packages = packageIds.ToList();
             packages.RemoveAll(pid => PackageInfo.ContainsKey(pid));
 
             if (packages.Count == 0 || bAborted)
                 return;
 
-            var completed = false;
+            bool completed = false;
             Action<SteamApps.PICSProductInfoCallback> cbMethod = packageInfo =>
             {
                 completed = !packageInfo.ResponsePending;
 
-                foreach (var package_value in packageInfo.Packages)
+                foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> package_value in packageInfo.Packages)
                 {
-                    var package = package_value.Value;
+                    SteamApps.PICSProductInfoCallback.PICSProductInfo package = package_value.Value;
                     PackageInfo[package.ID] = package;
                 }
 
-                foreach (var package in packageInfo.UnknownPackages)
+                foreach (uint package in packageInfo.UnknownPackages)
                 {
                     PackageInfo[package] = null;
                 }
             };
 
-            var packageRequests = new List<SteamApps.PICSRequest>();
+            List<SteamApps.PICSRequest> packageRequests = new List<SteamApps.PICSRequest>();
 
-            foreach (var package in packages)
+            foreach (uint package in packages)
             {
-                var request = new SteamApps.PICSRequest(package);
+                SteamApps.PICSRequest request = new SteamApps.PICSRequest(package);
 
-                if (PackageTokens.TryGetValue(package, out var token))
+                if (PackageTokens.TryGetValue(package, out ulong token))
                 {
                     request.AccessToken = token;
                 }
@@ -224,8 +224,8 @@ namespace DepotDownloader
 
         public bool RequestFreeAppLicense(uint appId)
         {
-            var success = false;
-            var completed = false;
+            bool success = false;
+            bool completed = false;
             Action<SteamApps.FreeLicenseCallback> cbMethod = resultInfo =>
             {
                 completed = true;
@@ -245,7 +245,7 @@ namespace DepotDownloader
             if (DepotKeys.ContainsKey(depotId) || bAborted)
                 return;
 
-            var completed = false;
+            bool completed = false;
 
             Action<SteamApps.DepotKeyCallback> cbMethod = depotKey =>
             {
@@ -273,7 +273,7 @@ namespace DepotDownloader
             if (bAborted)
                 return 0;
 
-            var requestCode = await steamContent.GetManifestRequestCode(depotId, appId, manifestId, branch);
+            ulong requestCode = await steamContent.GetManifestRequestCode(depotId, appId, manifestId, branch);
 
             Console.WriteLine("Got manifest request code for {0} {1} result: {2}",
                 depotId, manifestId,
@@ -284,14 +284,14 @@ namespace DepotDownloader
 
         public void CheckAppBetaPassword(uint appid, string password)
         {
-            var completed = false;
+            bool completed = false;
             Action<SteamApps.CheckAppBetaPasswordCallback> cbMethod = appPassword =>
             {
                 completed = true;
 
                 Console.WriteLine("Retrieved {0} beta keys with result: {1}", appPassword.BetaPasswords.Count, appPassword.Result);
 
-                foreach (var entry in appPassword.BetaPasswords)
+                foreach (KeyValuePair<string, byte[]> entry in appPassword.BetaPasswords)
                 {
                     AppBetaPasswords[entry.Key] = entry.Value;
                 }
@@ -305,10 +305,10 @@ namespace DepotDownloader
 
         public PublishedFileDetails GetPublishedFileDetails(uint appId, PublishedFileID pubFile)
         {
-            var pubFileRequest = new CPublishedFile_GetDetails_Request { appid = appId };
+            CPublishedFile_GetDetails_Request pubFileRequest = new CPublishedFile_GetDetails_Request { appid = appId };
             pubFileRequest.publishedfileids.Add(pubFile);
 
-            var completed = false;
+            bool completed = false;
             PublishedFileDetails details = null;
 
             Action<SteamUnifiedMessages.ServiceMethodResponse> cbMethod = callback =>
@@ -316,7 +316,7 @@ namespace DepotDownloader
                 completed = true;
                 if (callback.Result == EResult.OK)
                 {
-                    var response = callback.GetDeserializedResponse<CPublishedFile_GetDetails_Response>();
+                    CPublishedFile_GetDetails_Response response = callback.GetDeserializedResponse<CPublishedFile_GetDetails_Response>();
                     details = response.publishedfiledetails.FirstOrDefault();
                 }
                 else
@@ -336,7 +336,7 @@ namespace DepotDownloader
 
         public SteamCloud.UGCDetailsCallback GetUGCDetails(UGCHandle ugcHandle)
         {
-            var completed = false;
+            bool completed = false;
             SteamCloud.UGCDetailsCallback details = null;
 
             Action<SteamCloud.UGCDetailsCallback> cbMethod = callback =>
@@ -420,7 +420,7 @@ namespace DepotDownloader
         {
             callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
 
-            var diff = DateTime.Now - connectTime;
+            TimeSpan diff = DateTime.Now - connectTime;
 
             if (diff > STEAM3_TIMEOUT && !bConnected)
             {
@@ -458,7 +458,7 @@ namespace DepotDownloader
                     {
                         try
                         {
-                            _ = AccountSettingsStore.Instance.GuardData.TryGetValue(logonDetails.Username, out var guarddata);
+                            _ = AccountSettingsStore.Instance.GuardData.TryGetValue(logonDetails.Username, out string guarddata);
                             authSession = await steamClient.Authentication.BeginAuthSessionViaCredentialsAsync(new SteamKit2.Authentication.AuthSessionDetails
                             {
                                 Username = logonDetails.Username,
@@ -485,7 +485,7 @@ namespace DepotDownloader
 
                         try
                         {
-                            var session = await steamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
+                            QrAuthSession session = await steamClient.Authentication.BeginAuthSessionViaQRAsync(new AuthSessionDetails
                             {
                                 IsPersistentSession = ContentDownloader.Config.RememberPassword,
                                 Authenticator = new UserConsoleAuthenticator(),
@@ -522,7 +522,7 @@ namespace DepotDownloader
                 {
                     try
                     {
-                        var result = await authSession.PollingWaitForResultAsync();
+                        AuthPollResult result = await authSession.PollingWaitForResultAsync();
 
                         logonDetails.Username = result.AccountName;
                         logonDetails.Password = null;
@@ -597,14 +597,14 @@ namespace DepotDownloader
 
         private void LogOnCallback(SteamUser.LoggedOnCallback loggedOn)
         {
-            var isSteamGuard = loggedOn.Result == EResult.AccountLogonDenied;
-            var is2FA = loggedOn.Result == EResult.AccountLoginDeniedNeedTwoFactor;
-            var isAccessToken = ContentDownloader.Config.RememberPassword && logonDetails.AccessToken != null &&
-                loggedOn.Result is EResult.InvalidPassword
-                or EResult.InvalidSignature
-                or EResult.AccessDenied
-                or EResult.Expired
-                or EResult.Revoked;
+            bool isSteamGuard = loggedOn.Result == EResult.AccountLogonDenied;
+            bool is2FA = loggedOn.Result == EResult.AccountLoginDeniedNeedTwoFactor;
+            bool isAccessToken = ContentDownloader.Config.RememberPassword && logonDetails.AccessToken != null &&
+                                 loggedOn.Result is EResult.InvalidPassword
+                                     or EResult.InvalidSignature
+                                     or EResult.AccessDenied
+                                     or EResult.Expired
+                                     or EResult.Revoked;
 
             if (isSteamGuard || is2FA || isAccessToken)
             {
@@ -699,7 +699,7 @@ namespace DepotDownloader
             Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
             Licenses = licenseList.LicenseList;
 
-            foreach (var license in licenseList.LicenseList)
+            foreach (SteamApps.LicenseListCallback.License license in licenseList.LicenseList)
             {
                 if (license.AccessToken > 0)
                 {
@@ -711,10 +711,10 @@ namespace DepotDownloader
         private static void DisplayQrCode(string challengeUrl)
         {
             // Encode the link as a QR code
-            using var qrGenerator = new QRCodeGenerator();
-            var qrCodeData = qrGenerator.CreateQrCode(challengeUrl, QRCodeGenerator.ECCLevel.L);
-            using var qrCode = new AsciiQRCode(qrCodeData);
-            var qrCodeAsAsciiArt = qrCode.GetGraphic(1, drawQuietZones: false);
+            using QRCodeGenerator qrGenerator = new QRCodeGenerator();
+            QRCodeData qrCodeData = qrGenerator.CreateQrCode(challengeUrl, QRCodeGenerator.ECCLevel.L);
+            using AsciiQRCode qrCode = new AsciiQRCode(qrCodeData);
+            string qrCodeAsAsciiArt = qrCode.GetGraphic(1, drawQuietZones: false);
 
             Console.WriteLine("Use the Steam Mobile App to sign in with this QR code:");
             Console.WriteLine(qrCodeAsAsciiArt);

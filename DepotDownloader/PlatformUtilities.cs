@@ -59,7 +59,7 @@ namespace DepotDownloader
         {
             if (i == -1)
             {
-                var errno = Marshal.GetLastWin32Error();
+                int errno = Marshal.GetLastWin32Error();
                 throw new Exception(Marshal.PtrToStringAnsi(strerror(errno)));
             }
         }
@@ -72,17 +72,17 @@ namespace DepotDownloader
                 {
                     case Architecture.X64:
                     {
-                        ThrowIf(statLinuxX64(1, path, out var stat));
+                        ThrowIf(statLinuxX64(1, path, out StatLinuxX64 stat));
                         return stat.st_mode;
                     }
                     case Architecture.Arm:
                     {
-                        ThrowIf(statLinuxArm32(3, path, out var stat));
+                        ThrowIf(statLinuxArm32(3, path, out StatLinuxArm32 stat));
                         return stat.st_mode;
                     }
                     case Architecture.Arm64:
                     {
-                        ThrowIf(statLinuxArm64(0, path, out var stat));
+                        ThrowIf(statLinuxArm64(0, path, out StatLinuxArm64 stat));
                         return stat.st_mode;
                     }
                 }
@@ -93,12 +93,12 @@ namespace DepotDownloader
                 {
                     case Architecture.X64:
                     {
-                        ThrowIf(statOSXCompat(path, out var stat));
+                        ThrowIf(statOSXCompat(path, out StatOSX stat));
                         return stat.st_mode;
                     }
                     case Architecture.Arm64:
                     {
-                        ThrowIf(statOSX(path, out var stat));
+                        ThrowIf(statOSX(path, out StatOSX stat));
                         return stat.st_mode;
                     }
                 }
@@ -113,8 +113,8 @@ namespace DepotDownloader
                 return;
             }
 
-            var mode = GetFileMode(path);
-            var hasExecuteMask = (mode & ModeExecute) == ModeExecute;
+            uint mode = GetFileMode(path);
+            bool hasExecuteMask = (mode & ModeExecute) == ModeExecute;
             if (hasExecuteMask != value)
             {
                 ThrowIf(chmod(path, (uint)(value

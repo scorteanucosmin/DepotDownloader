@@ -38,7 +38,7 @@ namespace DepotDownloader
         public static string ReadPassword()
         {
             ConsoleKeyInfo keyInfo;
-            var password = new StringBuilder();
+            StringBuilder password = new StringBuilder();
 
             do
             {
@@ -56,7 +56,7 @@ namespace DepotDownloader
                 }
 
                 /* Printable ASCII characters only */
-                var c = keyInfo.KeyChar;
+                char c = keyInfo.KeyChar;
                 if (c >= ' ' && c <= '~')
                 {
                     password.Append(c);
@@ -70,12 +70,12 @@ namespace DepotDownloader
         // Validate a file against Steam3 Chunk data
         public static List<ProtoManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, ProtoManifest.ChunkData[] chunkdata)
         {
-            var neededChunks = new List<ProtoManifest.ChunkData>();
+            List<ProtoManifest.ChunkData> neededChunks = new List<ProtoManifest.ChunkData>();
             int read;
 
-            foreach (var data in chunkdata)
+            foreach (ProtoManifest.ChunkData data in chunkdata)
             {
-                var chunk = new byte[data.UncompressedLength];
+                byte[] chunk = new byte[data.UncompressedLength];
                 fs.Seek((long)data.Offset, SeekOrigin.Begin);
                 read = fs.Read(chunk, 0, (int)data.UncompressedLength);
 
@@ -90,7 +90,7 @@ namespace DepotDownloader
                     tempchunk = chunk;
                 }
 
-                var adler = AdlerHash(tempchunk);
+                byte[] adler = AdlerHash(tempchunk);
                 if (!adler.SequenceEqual(data.Checksum))
                 {
                     neededChunks.Add(data);
@@ -103,7 +103,7 @@ namespace DepotDownloader
         public static byte[] AdlerHash(byte[] input)
         {
             uint a = 0, b = 0;
-            for (var i = 0; i < input.Length; i++)
+            for (int i = 0; i < input.Length; i++)
             {
                 a = (a + input[i]) % 65521;
                 b = (b + a) % 65521;
@@ -117,10 +117,10 @@ namespace DepotDownloader
             if (hex == null)
                 return null;
 
-            var chars = hex.Length;
-            var bytes = new byte[chars / 2];
+            int chars = hex.Length;
+            byte[] bytes = new byte[chars / 2];
 
-            for (var i = 0; i < chars; i += 2)
+            for (int i = 0; i < chars; i += 2)
                 bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
 
             return bytes;
@@ -138,26 +138,26 @@ namespace DepotDownloader
             ArgumentNullException.ThrowIfNull(taskFactories);
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maxDegreeOfParallelism, 0);
 
-            var queue = taskFactories.ToArray();
+            Func<Task>[] queue = taskFactories.ToArray();
 
             if (queue.Length == 0)
             {
                 return;
             }
 
-            var tasksInFlight = new List<Task>(maxDegreeOfParallelism);
-            var index = 0;
+            List<Task> tasksInFlight = new List<Task>(maxDegreeOfParallelism);
+            int index = 0;
 
             do
             {
                 while (tasksInFlight.Count < maxDegreeOfParallelism && index < queue.Length)
                 {
-                    var taskFactory = queue[index++];
+                    Func<Task> taskFactory = queue[index++];
 
                     tasksInFlight.Add(taskFactory());
                 }
 
-                var completedTask = await Task.WhenAny(tasksInFlight).ConfigureAwait(false);
+                Task completedTask = await Task.WhenAny(tasksInFlight).ConfigureAwait(false);
 
                 await completedTask.ConfigureAwait(false);
 
