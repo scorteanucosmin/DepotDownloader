@@ -25,7 +25,11 @@ public static class DepotDownloaderHelper
     {
         DebugLog.Enabled = false;
         
-        AccountSettingsStore.LoadFromFile("account.config");
+        if (AccountSettingsStore.Instance == null)
+        {
+            AccountSettingsStore.LoadFromFile("account.config");
+        }
+        
         ContentDownloader.Config.InstallDirectory = dir;
         ContentDownloader.Config.VerifyAll = validate;
         ContentDownloader.Config.MaxServers = 20;
