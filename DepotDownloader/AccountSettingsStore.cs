@@ -33,10 +33,7 @@ namespace DepotDownloader
             GuardData = [];
         }
 
-        static bool Loaded
-        {
-            get { return Instance != null; }
-        }
+        private static bool Loaded => Instance != null;
 
         public static AccountSettingsStore Instance;
         static readonly IsolatedStorageFile IsolatedStorage = IsolatedStorageFile.GetUserStoreForAssembly();
@@ -44,7 +41,9 @@ namespace DepotDownloader
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
-                throw new Exception("Config already loaded");
+            {
+                throw new Exception("Account config already loaded");
+            }
 
             if (IsolatedStorage.FileExists(filename))
             {

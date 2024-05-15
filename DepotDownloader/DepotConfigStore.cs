@@ -19,17 +19,16 @@ namespace DepotDownloader
             InstalledManifestIDs = [];
         }
 
-        static bool Loaded
-        {
-            get { return Instance != null; }
-        }
+        private static bool Loaded => Instance != null;
 
         public static DepotConfigStore Instance;
 
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
-                throw new Exception("Config already loaded");
+            {
+                throw new Exception("Depot config already loaded");
+            }
 
             if (File.Exists(filename))
             {

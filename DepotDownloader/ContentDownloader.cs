@@ -407,7 +407,10 @@ namespace DepotDownloader
             }
 
             Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
-            DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
+            if (DepotConfigStore.Instance == null)
+            {
+                DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
+            }
 
             steam3?.RequestAppInfo(appId);
 
