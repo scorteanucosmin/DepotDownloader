@@ -42,6 +42,7 @@ namespace DepotDownloader
         {
             if (Loaded)
             {
+                DepotDownloaderHelper.Logger.Error("Account config already loaded");
                 throw new Exception("Account config already loaded");
             }
 
@@ -50,12 +51,12 @@ namespace DepotDownloader
                 try
                 {
                     using IsolatedStorageFileStream fs = IsolatedStorage.OpenFile(filename, FileMode.Open, FileAccess.Read);
-                    using DeflateStream ds = new DeflateStream(fs, CompressionMode.Decompress);
+                    using DeflateStream ds = new(fs, CompressionMode.Decompress);
                     Instance = Serializer.Deserialize<AccountSettingsStore>(ds);
                 }
                 catch (IOException ex)
                 {
-                    Console.WriteLine("Failed to load account settings: {0}", ex.Message);
+                    DepotDownloaderHelper.Logger.Error("Failed to load account settings: {0}", ex.Message);
                     Instance = new AccountSettingsStore();
                 }
             }
@@ -70,17 +71,20 @@ namespace DepotDownloader
         public static void Save()
         {
             if (!Loaded)
+            {
+                DepotDownloaderHelper.Logger.Error("Saved config before loading");
                 throw new Exception("Saved config before loading");
+            }
 
             try
             {
                 using IsolatedStorageFileStream fs = IsolatedStorage.OpenFile(Instance.FileName, FileMode.Create, FileAccess.Write);
-                using DeflateStream ds = new DeflateStream(fs, CompressionMode.Compress);
+                using DeflateStream ds = new(fs, CompressionMode.Compress);
                 Serializer.Serialize(ds, Instance);
             }
             catch (IOException ex)
             {
-                Console.WriteLine("Failed to save account settings: {0}", ex.Message);
+                DepotDownloaderHelper.Logger.Error("Failed to save account settings: {0}", ex.Message);
             }
         }
     }

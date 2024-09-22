@@ -130,9 +130,9 @@ namespace DepotDownloader
                 return null;
             }
 
-            using MemoryStream ms = new MemoryStream();
+            using MemoryStream ms = new();
             using (FileStream fs = File.Open(filename, FileMode.Open))
-            using (DeflateStream ds = new DeflateStream(fs, CompressionMode.Decompress))
+            using (DeflateStream ds = new(fs, CompressionMode.Decompress))
                 ds.CopyTo(ms);
 
             checksum = SHA1.HashData(ms.ToArray());
@@ -143,7 +143,7 @@ namespace DepotDownloader
 
         public void SaveToFile(string filename, out byte[] checksum)
         {
-            using MemoryStream ms = new MemoryStream();
+            using MemoryStream ms = new();
             Serializer.Serialize(ms, this);
 
             checksum = SHA1.HashData(ms.ToArray());
@@ -151,7 +151,7 @@ namespace DepotDownloader
             ms.Seek(0, SeekOrigin.Begin);
 
             using FileStream fs = File.Open(filename, FileMode.Create);
-            using DeflateStream ds = new DeflateStream(fs, CompressionMode.Compress);
+            using DeflateStream ds = new(fs, CompressionMode.Compress);
             ms.CopyTo(ds);
         }
     }

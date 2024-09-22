@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using NLog;
 using SteamKit2;
 
 namespace DepotDownloader;
@@ -10,8 +11,9 @@ namespace DepotDownloader;
 /// </summary>
 public static class DepotDownloaderHelper
 {
-    private static readonly char[] newLineCharacters = ['\n', '\r'];
-
+    public static readonly Logger Logger = 
+        LogManager.Setup().LoadConfigurationFromFile("nlog.config").GetCurrentClassLogger();
+    
     /// <summary>
     /// Downloads steam depot based on app id and depot id, can also specify manifest id for other veer
     /// </summary>
@@ -44,13 +46,13 @@ public static class DepotDownloaderHelper
                 await ContentDownloader.DownloadAppAsync(appId, depotManifestIds, branch, null, null, "english", 
                         false, false).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is ContentDownloaderException || ex is OperationCanceledException)
+            catch (Exception ex) when (ex is ContentDownloaderException or OperationCanceledException)
             {
-                Console.WriteLine(ex.Message);
+                Logger.Error(ex.Message);
             }
             catch (Exception e)
             {
-                Console.WriteLine("Download failed to due to an unhandled exception: {0}", e.Message);
+                Logger.Error("Download failed to due to an unhandled exception: {0}", e.Message);
                 throw;
             }
             finally
@@ -60,7 +62,7 @@ public static class DepotDownloaderHelper
         }
         else
         {
-            Console.WriteLine("Error: InitializeSteam failed");
+            Logger.Error("Error: InitializeSteam failed");
         }
         
     }
@@ -73,22 +75,16 @@ public static class DepotDownloaderHelper
             do
             {
                 Console.Write("Enter account password for \"{0}\": ", username);
-                if (Console.IsInputRedirected)
-                {
-                    password = Console.ReadLine();
-                }
-                else
-                {
+                password = Console.IsInputRedirected ? Console.ReadLine() :
                     // Avoid console echoing of password
-                    password = Util.ReadPassword();
-                }
+                    Util.ReadPassword();
 
                 Console.WriteLine();
             } while (string.Empty == password);
         }
         else if (username == null)
         {
-            Console.WriteLine("No username given. Using anonymous account with dedicated server subscription.");
+            Logger.Info("No username given. Using anonymous account with dedicated server subscription.");
         }
 
         return ContentDownloader.InitializeSteam3(username, password);

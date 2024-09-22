@@ -1,4 +1,3 @@
-using System;
 using System.Diagnostics.Tracing;
 using System.Text;
 
@@ -36,7 +35,7 @@ namespace DepotDownloader
             }
 
             sb.Append(')');
-            Console.WriteLine(sb.ToString());
+            DepotDownloaderHelper.Logger.Info(sb.ToString());
         }
     }
 }

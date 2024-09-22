@@ -33,7 +33,7 @@ namespace DepotDownloader
             if (File.Exists(filename))
             {
                 using FileStream fs = File.Open(filename, FileMode.Open);
-                using DeflateStream ds = new DeflateStream(fs, CompressionMode.Decompress);
+                using DeflateStream ds = new(fs, CompressionMode.Decompress);
                 Instance = Serializer.Deserialize<DepotConfigStore>(ds);
             }
             else
@@ -50,7 +50,7 @@ namespace DepotDownloader
                 throw new Exception("Saved config before loading");
 
             using FileStream fs = File.Open(Instance.FileName, FileMode.Create);
-            using DeflateStream ds = new DeflateStream(fs, CompressionMode.Compress);
+            using DeflateStream ds = new(fs, CompressionMode.Compress);
             Serializer.Serialize(ds, Instance);
         }
     }

@@ -38,7 +38,7 @@ namespace DepotDownloader
         public static string ReadPassword()
         {
             ConsoleKeyInfo keyInfo;
-            StringBuilder password = new StringBuilder();
+            StringBuilder password = new();
 
             do
             {
@@ -70,7 +70,7 @@ namespace DepotDownloader
         // Validate a file against Steam3 Chunk data
         public static List<ProtoManifest.ChunkData> ValidateSteam3FileChecksums(FileStream fs, ProtoManifest.ChunkData[] chunkdata)
         {
-            List<ProtoManifest.ChunkData> neededChunks = new List<ProtoManifest.ChunkData>();
+            List<ProtoManifest.ChunkData> neededChunks = new();
             int read;
 
             foreach (ProtoManifest.ChunkData data in chunkdata)
@@ -145,7 +145,7 @@ namespace DepotDownloader
                 return;
             }
 
-            List<Task> tasksInFlight = new List<Task>(maxDegreeOfParallelism);
+            List<Task> tasksInFlight = new(maxDegreeOfParallelism);
             int index = 0;
 
             do

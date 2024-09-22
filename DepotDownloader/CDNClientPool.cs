@@ -55,7 +55,7 @@ namespace DepotDownloader
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Failed to retrieve content server list: {0}", ex.Message);
+                DepotDownloaderHelper.Logger.Error("Failed to retrieve content server list: {0}", ex.Message);
             }
 
             return null;
@@ -76,11 +76,11 @@ namespace DepotDownloader
 
                     if (servers == null || servers.Count == 0)
                     {
-                        ExhaustedToken?.Cancel();
+                        await ExhaustedToken?.CancelAsync();
                         return;
                     }
 
-                    ProxyServer = servers.Where(x => x.UseAsProxy).FirstOrDefault();
+                    ProxyServer = servers.FirstOrDefault(x => x.UseAsProxy);
 
                     IOrderedEnumerable<(Server server, int penalty)> weightedCdnServers = servers
                         .Where(server =>
@@ -108,7 +108,7 @@ namespace DepotDownloader
                 }
                 else if (availableServerEndpoints.Count == 0 && !steamSession.steamClient.IsConnected && didPopulate)
                 {
-                    ExhaustedToken?.Cancel();
+                    await ExhaustedToken?.CancelAsync();
                     return;
                 }
             }

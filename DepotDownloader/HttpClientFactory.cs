@@ -13,7 +13,7 @@ namespace DepotDownloader
     {
         public static HttpClient CreateHttpClient()
         {
-            HttpClient client = new HttpClient(new SocketsHttpHandler
+            HttpClient client = new(new SocketsHttpHandler
             {
                 ConnectCallback = IPv4ConnectAsync
             });
@@ -29,7 +29,7 @@ namespace DepotDownloader
             // By default, we create dual-mode sockets:
             // Socket socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
 
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+            Socket socket = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
             {
                 NoDelay = true
             };
