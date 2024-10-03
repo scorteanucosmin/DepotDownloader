@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -245,7 +246,7 @@ namespace DepotDownloader
                         byte[] manifest_bytes;
                         try
                         {
-                            manifest_bytes = CryptoHelper.SymmetricDecryptECB(input, appBetaPassword);
+                            manifest_bytes = Util.SymmetricDecryptECB(input, appBetaPassword);
                         }
                         catch (Exception e)
                         {
@@ -335,7 +336,7 @@ namespace DepotDownloader
             }
             else
             {
-                Console.WriteLine("Unable to locate manifest ID for published file {0}", publishedFileId);
+                DepotDownloaderHelper.Logger.Error("Unable to locate manifest ID for published file {0}", publishedFileId);
             }
         }
 
@@ -349,7 +350,7 @@ namespace DepotDownloader
             }
             else
             {
-                Console.WriteLine($"Unable to query UGC details for {ugcId} from an anonymous account");
+                DepotDownloaderHelper.Logger.Error($"Unable to query UGC details for {ugcId} from an anonymous account");
             }
 
             if (!string.IsNullOrEmpty(details?.URL))
@@ -366,7 +367,7 @@ namespace DepotDownloader
         {
             if (!CreateDirectories(appId, 0, out string installDir))
             {
-                Console.WriteLine("Error: Unable to create install directories!");
+                DepotDownloaderHelper.Logger.Error("Error: Unable to create install directories!");
                 return;
             }
 
@@ -643,6 +644,7 @@ namespace DepotDownloader
 
         private class GlobalDownloadCounter
         {
+            public ulong CompleteDownloadSize;
             public ulong TotalBytesCompressed;
             public ulong TotalBytesUncompressed;
         }
@@ -964,7 +966,7 @@ namespace DepotDownloader
 
             await Util.InvokeAsync(
                 files.Select(file => new Func<Task>(async () =>
-                    await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, depotFilesData, file, networkChunkQueue)))),
+                    await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
                 maxDegreeOfParallelism: Config.MaxDownloads
             );
 
@@ -1013,6 +1015,7 @@ namespace DepotDownloader
 
         private static void DownloadSteam3AsyncDepotFile(
             CancellationTokenSource cts,
+            GlobalDownloadCounter downloadCounter,
             DepotFilesData depotFilesData,
             ProtoManifest.FileData file,
             ConcurrentQueue<(FileStreamData, ProtoManifest.FileData, ProtoManifest.ChunkData)> networkChunkQueue)
@@ -1053,9 +1056,7 @@ namespace DepotDownloader
                 }
                 catch (IOException ex)
                 {
-                    DepotDownloaderHelper.Logger.Error("Failed to allocate file {0}: {1}", 
-                        fileFinalPath, ex.Message);
-                    
+                    DepotDownloaderHelper.Logger.Error("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message);
                     throw new ContentDownloaderException($"Failed to allocate file {fileFinalPath}: {ex.Message}");
                 }
 
@@ -1102,10 +1103,7 @@ namespace DepotDownloader
                             {
                                 fsOld.Seek((long)match.OldChunk.Offset, SeekOrigin.Begin);
 
-                                byte[] tmp = new byte[match.OldChunk.UncompressedLength];
-                                fsOld.Read(tmp, 0, tmp.Length);
-
-                                byte[] adler = Util.AdlerHash(tmp);
+                                byte[] adler = Util.AdlerHash(fsOld, (int)match.OldChunk.UncompressedLength);
                                 if (!adler.SequenceEqual(match.OldChunk.Checksum))
                                 {
                                     neededChunks.Add(match.NewChunk);
@@ -1130,10 +1128,9 @@ namespace DepotDownloader
                                 }
                                 catch (IOException ex)
                                 {
-                                    DepotDownloaderHelper.Logger.Error("Failed to resize file to expected size {0}: {1}", 
-                                        fileFinalPath, ex.Message);
-                                    
-                                    throw new ContentDownloaderException($"Failed to resize file to expected size {fileFinalPath}: {ex.Message}");
+                                    DepotDownloaderHelper.Logger.Error("Failed to resize file to expected size {0}: {1}", fileFinalPath, ex.Message);
+                                    throw new ContentDownloaderException(
+                                        $"Failed to resize file to expected size {fileFinalPath}: {ex.Message}");
                                 }
 
                                 foreach (ChunkMatch match in copyChunks)
@@ -1165,10 +1162,9 @@ namespace DepotDownloader
                         }
                         catch (IOException ex)
                         {
-                            DepotDownloaderHelper.Logger.Error("Failed to allocate file {0}: {1}", 
-                                fileFinalPath, ex.Message);
-                            
-                            throw new ContentDownloaderException($"Failed to allocate file {fileFinalPath}: {ex.Message}");
+                            DepotDownloaderHelper.Logger.Error("Failed to allocate file {0}: {1}", fileFinalPath, ex.Message);
+                            throw new ContentDownloaderException(
+                                $"Failed to allocate file {fileFinalPath}: {ex.Message}");
                         }
                     }
 
@@ -1182,8 +1178,12 @@ namespace DepotDownloader
                     {
                         depotDownloadCounter.SizeDownloaded += file.TotalSize;
                         DepotDownloaderHelper.Logger.Info("{0,6:#00.00}% {1}", 
-                            depotDownloadCounter.SizeDownloaded / (float)depotDownloadCounter.CompleteDownloadSize * 100.0f, 
-                            fileFinalPath);
+                            depotDownloadCounter.SizeDownloaded / (float)depotDownloadCounter.CompleteDownloadSize * 100.0f, fileFinalPath);
+                    }
+
+                    lock (downloadCounter)
+                    {
+                        downloadCounter.CompleteDownloadSize -= file.TotalSize;
                     }
 
                     return;
@@ -1193,6 +1193,11 @@ namespace DepotDownloader
                 lock (depotDownloadCounter)
                 {
                     depotDownloadCounter.SizeDownloaded += sizeOnDisk;
+                }
+
+                lock (downloadCounter)
+                {
+                    downloadCounter.CompleteDownloadSize -= sizeOnDisk;
                 }
             }
 
@@ -1219,7 +1224,8 @@ namespace DepotDownloader
             }
         }
 
-        private static async Task DownloadSteam3AsyncDepotFileChunk(
+
+         private static async Task DownloadSteam3AsyncDepotFileChunk(
             CancellationTokenSource cts,
             GlobalDownloadCounter downloadCounter,
             DepotFilesData depotFilesData,
@@ -1232,96 +1238,122 @@ namespace DepotDownloader
             DepotDownloadInfo depot = depotFilesData.depotDownloadInfo;
             DepotDownloadCounter depotDownloadCounter = depotFilesData.depotCounter;
 
-            string chunkID = Util.EncodeHexString(chunk.ChunkID);
+            string chunkID = Convert.ToHexString(chunk.ChunkID).ToLowerInvariant();
 
             DepotManifest.ChunkData data = new()
             {
                 ChunkID = chunk.ChunkID,
-                Checksum = chunk.Checksum,
+                Checksum = BitConverter.ToUInt32(chunk.Checksum),
                 Offset = chunk.Offset,
                 CompressedLength = chunk.CompressedLength,
                 UncompressedLength = chunk.UncompressedLength
             };
 
-            DepotChunk chunkData = null;
-
-            do
-            {
-                cts.Token.ThrowIfCancellationRequested();
-
-                Server connection = null;
-
-                try
-                {
-                    connection = cdnPool.GetConnection(cts.Token);
-
-                    /*DepotDownloaderHelper.Logger.Info("Downloading chunk {0} from {1} with {2}", chunkID, 
-                        connection, cdnPool.ProxyServer != null ? cdnPool.ProxyServer : "no proxy");*/
-                    
-                    chunkData = await cdnPool.CDNClient.DownloadDepotChunkAsync(
-                        depot.DepotId,
-                        data,
-                        connection,
-                        depot.DepotKey,
-                        cdnPool.ProxyServer).ConfigureAwait(false);
-
-                    cdnPool.ReturnConnection(connection);
-                }
-                catch (TaskCanceledException)
-                {
-                    DepotDownloaderHelper.Logger.Error("Connection timeout downloading chunk {0}", chunkID);
-                }
-                catch (SteamKitWebRequestException e)
-                {
-                    cdnPool.ReturnBrokenConnection(connection);
-
-                    if (e.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                    {
-                        DepotDownloaderHelper.Logger.Error("Encountered 401 for chunk {0}. Aborting.", chunkID);
-                        break;
-                    }
-
-                    DepotDownloaderHelper.Logger.Error("Encountered error downloading chunk {0}: {1}", 
-                        chunkID, e.StatusCode);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                catch (Exception e)
-                {
-                    cdnPool.ReturnBrokenConnection(connection);
-                    DepotDownloaderHelper.Logger.Error("Encountered unexpected error downloading chunk {0}: {1}", 
-                        chunkID, e.Message);
-                }
-            } while (chunkData == null);
-
-            if (chunkData == null)
-            {
-                DepotDownloaderHelper.Logger.Error("Failed to find any server with chunk {0} for depot {1}. Aborting.", 
-                    chunkID, depot.DepotId);
-                await cts.CancelAsync();
-            }
-
-            // Throw the cancellation exception if requested so that this task is marked failed
-            cts.Token.ThrowIfCancellationRequested();
+            int written = 0;
+            byte[] chunkBuffer = ArrayPool<byte>.Shared.Rent((int)data.UncompressedLength);
 
             try
             {
-                await fileStreamData.fileLock.WaitAsync().ConfigureAwait(false);
-
-                if (fileStreamData.fileStream == null)
+                do
                 {
-                    string fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-                    fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
+                    cts.Token.ThrowIfCancellationRequested();
+
+                    Server connection = null;
+
+                    try
+                    {
+                        connection = cdnPool.GetConnection(cts.Token);
+
+                        string cdnToken = null;
+                        if (steam3.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host), out var authTokenCallbackPromise))
+                        {
+                            var result = await authTokenCallbackPromise.Task;
+                            cdnToken = result.Token;
+                        }
+
+                        DebugLog.WriteLine("ContentDownloader", "Downloading chunk {0} from {1} with {2}", chunkID, connection, cdnPool.ProxyServer != null ? cdnPool.ProxyServer : "no proxy");
+                        written = await cdnPool.CDNClient.DownloadDepotChunkAsync(
+                            depot.DepotId,
+                            data,
+                            connection,
+                            chunkBuffer,
+                            depot.DepotKey,
+                            cdnPool.ProxyServer,
+                            cdnToken).ConfigureAwait(false);
+
+                        cdnPool.ReturnConnection(connection);
+
+                        break;
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        DepotDownloaderHelper.Logger.Error("Connection timeout downloading chunk {0}", chunkID);
+                    }
+                    catch (SteamKitWebRequestException e)
+                    {
+                        // If the CDN returned 403, attempt to get a cdn auth if we didn't yet,
+                        // if auth task already exists, make sure it didn't complete yet, so that it gets awaited above
+                        if (e.StatusCode == HttpStatusCode.Forbidden &&
+                            (!steam3.CDNAuthTokens.TryGetValue((depot.DepotId, connection.Host), out var authTokenCallbackPromise) || !authTokenCallbackPromise.Task.IsCompleted))
+                        {
+                            await steam3.RequestCDNAuthToken(depot.AppId, depot.DepotId, connection);
+
+                            cdnPool.ReturnConnection(connection);
+
+                            continue;
+                        }
+
+                        cdnPool.ReturnBrokenConnection(connection);
+
+                        if (e.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                        {
+                            DepotDownloaderHelper.Logger.Error("Encountered {1} for chunk {0}. Aborting.", chunkID, (int)e.StatusCode);
+                            break;
+                        }
+
+                        DepotDownloaderHelper.Logger.Error("Encountered error downloading chunk {0}: {1}", chunkID, e.StatusCode);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        cdnPool.ReturnBrokenConnection(connection);
+                        DepotDownloaderHelper.Logger.Error("Encountered unexpected error downloading chunk {0}: {1}", chunkID, e.Message);
+                    }
+                } while (written == 0);
+
+                if (written == 0)
+                {
+                    DepotDownloaderHelper.Logger.Error("Failed to find any server with chunk {0} for depot {1}. Aborting.", chunkID, depot.DepotId);
+                    cts.Cancel();
                 }
 
-                fileStreamData.fileStream.Seek((long)chunkData.ChunkInfo.Offset, SeekOrigin.Begin);
-                await fileStreamData.fileStream.WriteAsync(chunkData.Data.AsMemory(0, chunkData.Data.Length), cts.Token);
+                // Throw the cancellation exception if requested so that this task is marked failed
+                cts.Token.ThrowIfCancellationRequested();
+
+                try
+                {
+                    await fileStreamData.fileLock.WaitAsync().ConfigureAwait(false);
+
+                    if (fileStreamData.fileStream == null)
+                    {
+                        string fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
+                        fileStreamData.fileStream = File.Open(fileFinalPath, FileMode.Open);
+                    }
+
+                    fileStreamData.fileStream.Seek((long)data.Offset, SeekOrigin.Begin);
+                    await fileStreamData.fileStream.WriteAsync(chunkBuffer.AsMemory(0, written), cts.Token);
+                }
+                finally
+                {
+                    fileStreamData.fileLock.Release();
+                }
             }
             finally
             {
-                fileStreamData.fileLock.Release();
+                ArrayPool<byte>.Shared.Return(chunkBuffer);
             }
 
             int remainingChunks = Interlocked.Decrement(ref fileStreamData.chunksToDownload);
@@ -1334,7 +1366,7 @@ namespace DepotDownloader
             ulong sizeDownloaded = 0;
             lock (depotDownloadCounter)
             {
-                sizeDownloaded = depotDownloadCounter.SizeDownloaded + (ulong)chunkData.Data.Length;
+                sizeDownloaded = depotDownloadCounter.SizeDownloaded + (ulong)written;
                 depotDownloadCounter.SizeDownloaded = sizeDownloaded;
                 depotDownloadCounter.DepotBytesCompressed += chunk.CompressedLength;
                 depotDownloadCounter.DepotBytesUncompressed += chunk.UncompressedLength;
@@ -1344,14 +1376,14 @@ namespace DepotDownloader
             {
                 downloadCounter.TotalBytesCompressed += chunk.CompressedLength;
                 downloadCounter.TotalBytesUncompressed += chunk.UncompressedLength;
+
+                Ansi.Progress(downloadCounter.TotalBytesUncompressed, downloadCounter.CompleteDownloadSize);
             }
 
             if (remainingChunks == 0)
             {
                 string fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
-                DepotDownloaderHelper.Logger.Info("{0,6:#00.00}% {1}", 
-                    sizeDownloaded / (float)depotDownloadCounter.CompleteDownloadSize * 100.0f, 
-                    fileFinalPath);
+                DepotDownloaderHelper.Logger.Info("{0,6:#00.00}% {1}", sizeDownloaded / (float)depotDownloadCounter.CompleteDownloadSize * 100.0f, fileFinalPath);
             }
         }
 
