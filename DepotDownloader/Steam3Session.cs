@@ -29,7 +29,7 @@ class Steam3Session
     public Dictionary<uint, ulong> AppTokens { get; } = [];
     public Dictionary<uint, ulong> PackageTokens { get; } = [];
     public Dictionary<uint, byte[]> DepotKeys { get; } = [];
-    public ConcurrentDictionary<(uint, string), TaskCompletionSource<SteamApps.CDNAuthTokenCallback>> CDNAuthTokens { get; } = [];
+    public ConcurrentDictionary<(uint, string), TaskCompletionSource<SteamContent.CDNAuthToken>> CDNAuthTokens { get; } = [];
     public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> AppInfo { get; } = [];
     public Dictionary<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> PackageInfo { get; } = [];
     public Dictionary<string, byte[]> AppBetaPasswords { get; } = [];
@@ -39,12 +39,11 @@ class Steam3Session
     public SteamContent steamContent;
     readonly SteamApps steamApps;
     readonly SteamCloud steamCloud;
-    readonly SteamUnifiedMessages.UnifiedService<IPublishedFile> steamPublishedFile;
+    readonly PublishedFile steamPublishedFile;
 
     readonly CallbackManager callbacks;
 
     readonly bool authenticatedUser;
-    bool bConnected;
     bool bConnecting;
     bool bAborted;
     bool bExpectingDisconnectRemote;
@@ -52,14 +51,11 @@ class Steam3Session
     bool bIsConnectionRecovery;
     int connectionBackoff;
     int seq; // more hack fixes
-    DateTime connectTime;
     AuthSession authSession;
+    readonly CancellationTokenSource abortedToken = new();
 
     // input
     readonly SteamUser.LogOnDetails logonDetails;
-
-    static readonly TimeSpan STEAM3_TIMEOUT = TimeSpan.FromSeconds(30);
-
 
     public Steam3Session(SteamUser.LogOnDetails details)
     {
@@ -77,7 +73,7 @@ class Steam3Session
         steamApps = steamClient.GetHandler<SteamApps>();
         steamCloud = steamClient.GetHandler<SteamCloud>();
         SteamUnifiedMessages steamUnifiedMessages = steamClient.GetHandler<SteamUnifiedMessages>();
-        steamPublishedFile = steamUnifiedMessages.CreateService<IPublishedFile>();
+        steamPublishedFile = steamUnifiedMessages.CreateService<PublishedFile>();
         steamContent = steamClient.GetHandler<SteamContent>();
 
         callbacks = new CallbackManager(steamClient);
@@ -87,7 +83,7 @@ class Steam3Session
         callbacks.Subscribe<SteamUser.LoggedOnCallback>(LogOnCallback);
         callbacks.Subscribe<SteamApps.LicenseListCallback>(LicenseListCallback);
 
-        DepotDownloaderHelper.Logger.Info("Connecting to Steam3...");
+        Console.Write("Connecting to Steam3...");
         Connect();
     }
 
@@ -109,7 +105,7 @@ class Steam3Session
             {
                 lock (steamLock)
                 {
-                    WaitForCallbacks();
+                    callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
                 }
             } while (!bAborted && this.seq == seq && !waiter());
         }
@@ -127,41 +123,56 @@ class Steam3Session
         return IsLoggedOn;
     }
 
-    public void RequestAppInfo(uint appId, bool bForce = false)
+    public async Task TickCallbacks()
+    {
+        CancellationToken token = abortedToken.Token;
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await callbacks.RunWaitCallbackAsync(token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            //
+        }
+    }
+
+    public async Task RequestAppInfo(uint appId, bool bForce = false)
     {
         if ((AppInfo.ContainsKey(appId) && !bForce) || bAborted)
             return;
 
-        bool completed = false;
-        Action<SteamApps.PICSTokensCallback> cbMethodTokens = appTokens =>
+        SteamApps.PICSTokensCallback appTokens = await steamApps.PICSGetAccessTokens([appId], []);
+
+        if (appTokens.AppTokensDenied.Contains(appId))
         {
-            completed = true;
-            if (appTokens.AppTokensDenied.Contains(appId))
-            {
-                DepotDownloaderHelper.Logger.Error("Insufficient privileges to get access token for app {0}", appId);
-            }
+            Console.WriteLine("Insufficient privileges to get access token for app {0}", appId);
+        }
 
-            foreach (KeyValuePair<uint, ulong> token_dict in appTokens.AppTokens)
-            {
-                AppTokens[token_dict.Key] = token_dict.Value;
-            }
-        };
-
-        WaitUntilCallback(() =>
+        foreach (KeyValuePair<uint, ulong> token_dict in appTokens.AppTokens)
         {
-            callbacks.Subscribe(steamApps.PICSGetAccessTokens(new List<uint> { appId }, new List<uint>()), cbMethodTokens);
-        }, () => { return completed; });
+            AppTokens[token_dict.Key] = token_dict.Value;
+        }
 
-        completed = false;
-        Action<SteamApps.PICSProductInfoCallback> cbMethod = appInfo =>
+        SteamApps.PICSRequest request = new(appId);
+
+        if (AppTokens.TryGetValue(appId, out ulong token))
         {
-            completed = !appInfo.ResponsePending;
+            request.AccessToken = token;
+        }
 
+        AsyncJobMultiple<SteamApps.PICSProductInfoCallback>.ResultSet appInfoMultiple = await steamApps.PICSGetProductInfo([request], []);
+
+        foreach (SteamApps.PICSProductInfoCallback appInfo in appInfoMultiple.Results)
+        {
             foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> app_value in appInfo.Apps)
             {
                 SteamApps.PICSProductInfoCallback.PICSProductInfo app = app_value.Value;
 
-                DepotDownloaderHelper.Logger.Info("Got AppInfo for {0}", app.ID);
+                Console.WriteLine("Got AppInfo for {0}", app.ID);
                 AppInfo[app.ID] = app;
             }
 
@@ -169,44 +180,16 @@ class Steam3Session
             {
                 AppInfo[app] = null;
             }
-        };
-
-        SteamApps.PICSRequest request = new(appId);
-        if (AppTokens.TryGetValue(appId, out ulong token))
-        {
-            request.AccessToken = token;
         }
-
-        WaitUntilCallback(() =>
-        {
-            callbacks.Subscribe(steamApps.PICSGetProductInfo(new List<SteamApps.PICSRequest> { request }, new List<SteamApps.PICSRequest>()), cbMethod);
-        }, () => { return completed; });
     }
 
-    public void RequestPackageInfo(IEnumerable<uint> packageIds)
+    public async Task RequestPackageInfo(IEnumerable<uint> packageIds)
     {
         List<uint> packages = packageIds.ToList();
-        packages.RemoveAll(pid => PackageInfo.ContainsKey(pid));
+        packages.RemoveAll(PackageInfo.ContainsKey);
 
         if (packages.Count == 0 || bAborted)
             return;
-
-        bool completed = false;
-        Action<SteamApps.PICSProductInfoCallback> cbMethod = packageInfo =>
-        {
-            completed = !packageInfo.ResponsePending;
-
-            foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> package_value in packageInfo.Packages)
-            {
-                SteamApps.PICSProductInfoCallback.PICSProductInfo package = package_value.Value;
-                PackageInfo[package.ID] = package;
-            }
-
-            foreach (uint package in packageInfo.UnknownPackages)
-            {
-                PackageInfo[package] = null;
-            }
-        };
 
         List<SteamApps.PICSRequest> packageRequests = new();
 
@@ -222,55 +205,46 @@ class Steam3Session
             packageRequests.Add(request);
         }
 
-        WaitUntilCallback(() =>
+        AsyncJobMultiple<SteamApps.PICSProductInfoCallback>.ResultSet packageInfoMultiple = await steamApps.PICSGetProductInfo([], packageRequests);
+
+        foreach (SteamApps.PICSProductInfoCallback packageInfo in packageInfoMultiple.Results)
         {
-            callbacks.Subscribe(steamApps.PICSGetProductInfo(new List<SteamApps.PICSRequest>(), packageRequests), cbMethod);
-        }, () => { return completed; });
+            foreach (KeyValuePair<uint, SteamApps.PICSProductInfoCallback.PICSProductInfo> package_value in packageInfo.Packages)
+            {
+                SteamApps.PICSProductInfoCallback.PICSProductInfo package = package_value.Value;
+                PackageInfo[package.ID] = package;
+            }
+
+            foreach (uint package in packageInfo.UnknownPackages)
+            {
+                PackageInfo[package] = null;
+            }
+        }
     }
 
-    public bool RequestFreeAppLicense(uint appId)
+    public async Task<bool> RequestFreeAppLicense(uint appId)
     {
-        bool success = false;
-        bool completed = false;
-        Action<SteamApps.FreeLicenseCallback> cbMethod = resultInfo =>
-        {
-            completed = true;
-            success = resultInfo.GrantedApps.Contains(appId);
-        };
+        SteamApps.FreeLicenseCallback resultInfo = await steamApps.RequestFreeLicense(appId);
 
-        WaitUntilCallback(() =>
-        {
-            callbacks.Subscribe(steamApps.RequestFreeLicense(appId), cbMethod);
-        }, () => { return completed; });
-
-        return success;
+        return resultInfo.GrantedApps.Contains(appId);
     }
 
-    public void RequestDepotKey(uint depotId, uint appid = 0)
+    public async Task RequestDepotKey(uint depotId, uint appid = 0)
     {
         if (DepotKeys.ContainsKey(depotId) || bAborted)
             return;
 
-        bool completed = false;
+        SteamApps.DepotKeyCallback depotKey = await steamApps.GetDepotDecryptionKey(depotId, appid);
 
-        Action<SteamApps.DepotKeyCallback> cbMethod = depotKey =>
+        Console.WriteLine("Got depot key for {0} result: {1}", depotKey.DepotID, depotKey.Result);
+
+        if (depotKey.Result != EResult.OK)
         {
-            completed = true;
-            DepotDownloaderHelper.Logger.Info("Got depot key for {0} result: {1}", depotKey.DepotID, depotKey.Result);
+            Abort();
+            return;
+        }
 
-            if (depotKey.Result != EResult.OK)
-            {
-                Abort();
-                return;
-            }
-
-            DepotKeys[depotKey.DepotID] = depotKey.DepotKey;
-        };
-
-        WaitUntilCallback(() =>
-        {
-            callbacks.Subscribe(steamApps.GetDepotDecryptionKey(depotId, appid), cbMethod);
-        }, () => { return completed; });
+        DepotKeys[depotKey.DepotID] = depotKey.DepotKey;
     }
 
 
@@ -281,7 +255,7 @@ class Steam3Session
 
         ulong requestCode = await steamContent.GetManifestRequestCode(depotId, appId, manifestId, branch);
 
-        DepotDownloaderHelper.Logger.Info("Got manifest request code for {0} {1} result: {2}",
+        Console.WriteLine("Got manifest request code for {0} {1} result: {2}",
             depotId, manifestId,
             requestCode);
 
@@ -291,18 +265,18 @@ class Steam3Session
     public async Task RequestCDNAuthToken(uint appid, uint depotid, Server server)
     {
         (uint depotid, string Host) cdnKey = (depotid, server.Host);
-        TaskCompletionSource<SteamApps.CDNAuthTokenCallback> completion = new();
+        TaskCompletionSource<SteamContent.CDNAuthToken> completion = new();
 
         if (bAborted || !CDNAuthTokens.TryAdd(cdnKey, completion))
         {
             return;
         }
 
-        DepotDownloaderHelper.Logger.Info($"Requesting CDN auth token for {server.Host}");
+        DebugLog.WriteLine(nameof(Steam3Session), $"Requesting CDN auth token for {server.Host}");
 
-        SteamApps.CDNAuthTokenCallback cdnAuth = await steamApps.GetCDNAuthToken(appid, depotid, server.Host);
+        SteamContent.CDNAuthToken cdnAuth = await steamContent.GetCDNAuthToken(appid, depotid, server.Host);
 
-        DepotDownloaderHelper.Logger.Info($"Got CDN auth token for {server.Host} result: {cdnAuth.Result} (expires {cdnAuth.Expiration})");
+        Console.WriteLine($"Got CDN auth token for {server.Host} result: {cdnAuth.Result} (expires {cdnAuth.Expiration})");
 
         if (cdnAuth.Result != EResult.OK)
         {
@@ -312,88 +286,48 @@ class Steam3Session
         completion.TrySetResult(cdnAuth);
     }
 
-    public void CheckAppBetaPassword(uint appid, string password)
+    public async Task CheckAppBetaPassword(uint appid, string password)
     {
-        bool completed = false;
-        Action<SteamApps.CheckAppBetaPasswordCallback> cbMethod = appPassword =>
+        SteamApps.CheckAppBetaPasswordCallback appPassword = await steamApps.CheckAppBetaPassword(appid, password);
+
+        Console.WriteLine("Retrieved {0} beta keys with result: {1}", appPassword.BetaPasswords.Count, appPassword.Result);
+
+        foreach (KeyValuePair<string, byte[]> entry in appPassword.BetaPasswords)
         {
-            completed = true;
-
-            DepotDownloaderHelper.Logger.Info("Retrieved {0} beta keys with result: {1}", appPassword.BetaPasswords.Count, appPassword.Result);
-
-            foreach (KeyValuePair<string, byte[]> entry in appPassword.BetaPasswords)
-            {
-                AppBetaPasswords[entry.Key] = entry.Value;
-            }
-        };
-
-        WaitUntilCallback(() =>
-        {
-            callbacks.Subscribe(steamApps.CheckAppBetaPassword(appid, password), cbMethod);
-        }, () => { return completed; });
+            AppBetaPasswords[entry.Key] = entry.Value;
+        }
     }
 
-    public PublishedFileDetails GetPublishedFileDetails(uint appId, PublishedFileID pubFile)
+    public async Task<PublishedFileDetails> GetPublishedFileDetails(uint appId, PublishedFileID pubFile)
     {
         CPublishedFile_GetDetails_Request pubFileRequest = new() { appid = appId };
         pubFileRequest.publishedfileids.Add(pubFile);
 
-        bool completed = false;
-        PublishedFileDetails details = null;
+        SteamUnifiedMessages.ServiceMethodResponse<CPublishedFile_GetDetails_Response> details = await steamPublishedFile.GetDetails(pubFileRequest);
 
-        Action<SteamUnifiedMessages.ServiceMethodResponse> cbMethod = callback =>
+        if (details.Result == EResult.OK)
         {
-            completed = true;
-            if (callback.Result == EResult.OK)
-            {
-                CPublishedFile_GetDetails_Response response = callback.GetDeserializedResponse<CPublishedFile_GetDetails_Response>();
-                details = response.publishedfiledetails.FirstOrDefault();
-            }
-            else
-            {
-                DepotDownloaderHelper.Logger.Error("EResult {0} ({1}) while retrieving file details for pubfile {2}.", callback.Result, callback.Result, pubFile);
-                throw new Exception($"EResult {(int)callback.Result} ({callback.Result}) while retrieving file details for pubfile {pubFile}.");
-            }
-        };
+            return details.Body.publishedfiledetails.FirstOrDefault();
+        }
 
-        WaitUntilCallback(() =>
-        {
-            callbacks.Subscribe(steamPublishedFile.SendMessage(api => api.GetDetails(pubFileRequest)), cbMethod);
-        }, () => { return completed; });
-
-        return details;
+        throw new Exception($"EResult {(int)details.Result} ({details.Result}) while retrieving file details for pubfile {pubFile}.");
     }
 
 
-    public SteamCloud.UGCDetailsCallback GetUGCDetails(UGCHandle ugcHandle)
+    public async Task<SteamCloud.UGCDetailsCallback> GetUGCDetails(UGCHandle ugcHandle)
     {
-        bool completed = false;
-        SteamCloud.UGCDetailsCallback details = null;
+        SteamCloud.UGCDetailsCallback callback = await steamCloud.RequestUGCDetails(ugcHandle);
 
-        Action<SteamCloud.UGCDetailsCallback> cbMethod = callback =>
+        if (callback.Result == EResult.OK)
         {
-            completed = true;
-            if (callback.Result == EResult.OK)
-            {
-                details = callback;
-            }
-            else if (callback.Result == EResult.FileNotFound)
-            {
-                details = null;
-            }
-            else
-            {
-                DepotDownloaderHelper.Logger.Error("EResult {0} ({1}) while retrieving UGC details for {2}.", callback.Result, callback.Result, ugcHandle);
-                throw new Exception($"EResult {(int)callback.Result} ({callback.Result}) while retrieving UGC details for {ugcHandle}.");
-            }
-        };
-
-        WaitUntilCallback(() =>
+            return callback;
+        }
+        else if (callback.Result == EResult.FileNotFound)
         {
-            callbacks.Subscribe(steamCloud.RequestUGCDetails(ugcHandle), cbMethod);
-        }, () => { return completed; });
+            return null;
+        }
 
-        return details;
+        throw new Exception($"EResult {(int)callback.Result} ({callback.Result}) while retrieving UGC details for {ugcHandle}.");
     }
 
     private void ResetConnectionFlags()
@@ -406,14 +340,11 @@ class Steam3Session
     void Connect()
     {
         bAborted = false;
-        bConnected = false;
         bConnecting = true;
         connectionBackoff = 0;
         authSession = null;
 
         ResetConnectionFlags();
-
-        connectTime = DateTime.Now;
         steamClient.Connect();
     }
 
@@ -430,9 +361,9 @@ class Steam3Session
         }
 
         bAborted = true;
-        bConnected = false;
         bConnecting = false;
         bIsConnectionRecovery = false;
+        abortedToken.Cancel();
         steamClient.Disconnect();
 
         Ansi.Progress(Ansi.ProgressState.Hidden);
@@ -450,40 +381,25 @@ class Steam3Session
         steamClient.Disconnect();
     }
 
-    private void WaitForCallbacks()
-    {
-        callbacks.RunWaitCallbacks(TimeSpan.FromSeconds(1));
-
-        TimeSpan diff = DateTime.Now - connectTime;
-
-        if (diff > STEAM3_TIMEOUT && !bConnected)
-        {
-            DepotDownloaderHelper.Logger.Error("Timeout connecting to Steam3.");
-            Abort();
-        }
-    }
-
     private async void ConnectedCallback(SteamClient.ConnectedCallback connected)
     {
-        DepotDownloaderHelper.Logger.Info(" Done!");
+        Console.WriteLine(" Done!");
         bConnecting = false;
-        bConnected = true;
 
         // Update our tracking so that we don't time out, even if we need to reconnect multiple times,
         // e.g. if the authentication phase takes a while and therefore multiple connections.
-        connectTime = DateTime.Now;
         connectionBackoff = 0;
 
         if (!authenticatedUser)
         {
-            DepotDownloaderHelper.Logger.Info("Logging anonymously into Steam3...");
+            Console.Write("Logging anonymously into Steam3...");
             steamUser.LogOnAnonymous();
         }
         else
         {
             if (logonDetails.Username != null)
             {
-                DepotDownloaderHelper.Logger.Info("Logging '{0}' into Steam3...", logonDetails.Username);
+                Console.WriteLine("Logging '{0}' into Steam3...", logonDetails.Username);
             }
 
             if (authSession is null)
@@ -508,14 +424,14 @@ class Steam3Session
                     }
                     catch (Exception ex)
                     {
-                        DepotDownloaderHelper.Logger.Error("Failed to authenticate with Steam: " + ex.Message);
+                        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
                         Abort(false);
                         return;
                     }
                 }
                 else if (logonDetails.AccessToken is null && ContentDownloader.Config.UseQrCode)
                 {
-                    DepotDownloaderHelper.Logger.Info("Logging in with QR code...");
+                    Console.WriteLine("Logging in with QR code...");
 
                     try
                     {
@@ -531,7 +447,7 @@ class Steam3Session
                         session.ChallengeURLChanged = () =>
                         {
                             Console.WriteLine();
-                            DepotDownloaderHelper.Logger.Info("The QR code has changed:");
+                            Console.WriteLine("The QR code has changed:");
 
                             DisplayQrCode(session.ChallengeURL);
                         };
@@ -545,7 +461,7 @@ class Steam3Session
                     }
                     catch (Exception ex)
                     {
-                        DepotDownloaderHelper.Logger.Error("Failed to authenticate with Steam: " + ex.Message);
+                        Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
                         Abort(false);
                         return;
                     }
@@ -579,7 +495,7 @@ class Steam3Session
                 }
                 catch (Exception ex)
                 {
-                    DepotDownloaderHelper.Logger.Error("Failed to authenticate with Steam: " + ex.Message);
+                    Console.Error.WriteLine("Failed to authenticate with Steam: " + ex.Message);
                     Abort(false);
                     return;
                 }
@@ -595,33 +511,35 @@ class Steam3Session
     {
         bDidDisconnect = true;
 
-        DepotDownloaderHelper.Logger.Info($"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
+        DebugLog.WriteLine(nameof(Steam3Session), $"Disconnected: bIsConnectionRecovery = {bIsConnectionRecovery}, UserInitiated = {disconnected.UserInitiated}, bExpectingDisconnectRemote = {bExpectingDisconnectRemote}");
 
         // When recovering the connection, we want to reconnect even if the remote disconnects us
         if (!bIsConnectionRecovery && (disconnected.UserInitiated || bExpectingDisconnectRemote))
         {
-            DepotDownloaderHelper.Logger.Warn("Disconnected from Steam");
+            Console.WriteLine("Disconnected from Steam");
 
             // Any operations outstanding need to be aborted
             bAborted = true;
         }
         else if (connectionBackoff >= 10)
         {
-            DepotDownloaderHelper.Logger.Error("Could not connect to Steam after 10 tries");
+            Console.WriteLine("Could not connect to Steam after 10 tries");
             Abort(false);
         }
         else if (!bAborted)
         {
+            connectionBackoff += 1;
+
             if (bConnecting)
             {
-                DepotDownloaderHelper.Logger.Info("Connection to Steam failed. Trying again");
+                Console.WriteLine($"Connection to Steam failed. Trying again (#{connectionBackoff})...");
             }
             else
             {
-                DepotDownloaderHelper.Logger.Warn("Lost connection to Steam. Reconnecting");
+                Console.WriteLine("Lost connection to Steam. Reconnecting");
             }
 
-            Thread.Sleep(1000 * ++connectionBackoff);
+            Thread.Sleep(1000 * connectionBackoff);
 
             // Any connection related flags need to be reset here to match the state after Connect
             ResetConnectionFlags();
@@ -647,14 +565,14 @@ class Steam3Session
 
             if (!isAccessToken)
             {
-                DepotDownloaderHelper.Logger.Error("This account is protected by Steam Guard.");
+                Console.WriteLine("This account is protected by Steam Guard.");
             }
 
             if (is2FA)
             {
                 do
                 {
-                    DepotDownloaderHelper.Logger.Info("Please enter your 2 factor auth code from your authenticator app: ");
+                    Console.Write("Please enter your 2 factor auth code from your authenticator app: ");
                     logonDetails.TwoFactorCode = Console.ReadLine();
                 } while (string.Empty == logonDetails.TwoFactorCode);
             }
@@ -664,7 +582,7 @@ class Steam3Session
                 AccountSettingsStore.Save();
 
                 // TODO: Handle gracefully by falling back to password prompt?
-                DepotDownloaderHelper.Logger.Error($"Access token was rejected ({loggedOn.Result}).");
+                Console.WriteLine($"Access token was rejected ({loggedOn.Result}).");
                 Abort(false);
                 return;
             }
@@ -672,12 +590,12 @@ class Steam3Session
             {
                 do
                 {
-                    DepotDownloaderHelper.Logger.Info("Please enter the authentication code sent to your email address: ");
+                    Console.Write("Please enter the authentication code sent to your email address: ");
                     logonDetails.AuthCode = Console.ReadLine();
                 } while (string.Empty == logonDetails.AuthCode);
             }
 
-            DepotDownloaderHelper.Logger.Info("Retrying Steam3 connection...");
+            Console.Write("Retrying Steam3 connection...");
             Connect();
 
             return;
@@ -685,7 +603,7 @@ class Steam3Session
 
         if (loggedOn.Result == EResult.TryAnotherCM)
         {
-            DepotDownloaderHelper.Logger.Info("Retrying Steam3 connection (TryAnotherCM)...");
+            Console.Write("Retrying Steam3 connection (TryAnotherCM)...");
 
             Reconnect();
 
@@ -694,7 +612,7 @@ class Steam3Session
 
         if (loggedOn.Result == EResult.ServiceUnavailable)
         {
-            DepotDownloaderHelper.Logger.Error("Unable to login to Steam3: {0}", loggedOn.Result);
+            Console.WriteLine("Unable to login to Steam3: {0}", loggedOn.Result);
             Abort(false);
 
             return;
@@ -702,20 +620,20 @@ class Steam3Session
 
         if (loggedOn.Result != EResult.OK)
         {
-            DepotDownloaderHelper.Logger.Error("Unable to login to Steam3: {0}", loggedOn.Result);
+            Console.WriteLine("Unable to login to Steam3: {0}", loggedOn.Result);
             Abort();
 
             return;
         }
 
-        DepotDownloaderHelper.Logger.Info(" Done!");
+        Console.WriteLine(" Done!");
 
         seq++;
         IsLoggedOn = true;
 
         if (ContentDownloader.Config.CellID == 0)
         {
-            DepotDownloaderHelper.Logger.Info("Using Steam3 suggested CellID: " + loggedOn.CellID);
+            Console.WriteLine("Using Steam3 suggested CellID: " + loggedOn.CellID);
             ContentDownloader.Config.CellID = (int)loggedOn.CellID;
         }
     }
@@ -724,13 +642,13 @@ class Steam3Session
     {
         if (licenseList.Result != EResult.OK)
         {
-            DepotDownloaderHelper.Logger.Error("Unable to get license list: {0} ", licenseList.Result);
+            Console.WriteLine("Unable to get license list: {0} ", licenseList.Result);
             Abort();
 
             return;
         }
 
-        DepotDownloaderHelper.Logger.Info("Got {0} licenses for account!", licenseList.LicenseList.Count);
+        Console.WriteLine("Got {0} licenses for account!", licenseList.LicenseList.Count);
         Licenses = licenseList.LicenseList;
 
         foreach (SteamApps.LicenseListCallback.License license in licenseList.LicenseList)
@@ -750,7 +668,7 @@ class Steam3Session
         using AsciiQRCode qrCode = new(qrCodeData);
         string qrCodeAsAsciiArt = qrCode.GetGraphic(1, drawQuietZones: false);
 
-        DepotDownloaderHelper.Logger.Info("Use the Steam Mobile App to sign in with this QR code:");
+        Console.WriteLine("Use the Steam Mobile App to sign in with this QR code:");
         Console.WriteLine(qrCodeAsAsciiArt);
     }
 }

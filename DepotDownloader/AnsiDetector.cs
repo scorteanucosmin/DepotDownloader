@@ -39,13 +39,13 @@ internal static class AnsiDetector
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // Running under ConEmu?
-            var conEmu = Environment.GetEnvironmentVariable("ConEmuANSI");
+            string conEmu = Environment.GetEnvironmentVariable("ConEmuANSI");
             if (!string.IsNullOrEmpty(conEmu) && conEmu.Equals("On", StringComparison.OrdinalIgnoreCase))
             {
                 return (true, false);
             }
 
-            var supportsAnsi = Windows.SupportsAnsi(upgrade, stdError, out var legacyConsole);
+            bool supportsAnsi = Windows.SupportsAnsi(upgrade, stdError, out bool legacyConsole);
             return (supportsAnsi, legacyConsole);
         }
 
@@ -55,7 +55,7 @@ internal static class AnsiDetector
     private static (bool SupportsAnsi, bool LegacyConsole) DetectFromTerm()
     {
         // Check if the terminal is of type ANSI/VT100/xterm compatible.
-        var term = Environment.GetEnvironmentVariable("TERM");
+        string term = Environment.GetEnvironmentVariable("TERM");
         if (!string.IsNullOrWhiteSpace(term))
         {
             if (_regexes.Any(regex => regex.IsMatch(term)))
@@ -92,11 +92,11 @@ internal static class AnsiDetector
 
             try
             {
-                var @out = GetStdHandle(stdError ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
-                if (!GetConsoleMode(@out, out var mode))
+                IntPtr @out = GetStdHandle(stdError ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+                if (!GetConsoleMode(@out, out uint mode))
                 {
                     // Could not get console mode, try TERM (set in cygwin, WSL-Shell).
-                    var (ansiFromTerm, legacyFromTerm) = DetectFromTerm();
+                    (bool ansiFromTerm, bool legacyFromTerm) = DetectFromTerm();
 
                     isLegacy = ansiFromTerm ? legacyFromTerm : isLegacy;
                     return ansiFromTerm;

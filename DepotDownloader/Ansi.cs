@@ -5,7 +5,7 @@ using System;
 
 namespace DepotDownloader;
 
-internal static class Ansi
+static class Ansi
 {
     // https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC
     // https://learn.microsoft.com/en-us/windows/terminal/tutorials/progress-bar-sequences
@@ -30,14 +30,19 @@ internal static class Ansi
             return;
         }
 
-        var (supportsAnsi, legacyConsole) = AnsiDetector.Detect(stdError: false, upgrade: true);
+        if (OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        (bool supportsAnsi, bool legacyConsole) = AnsiDetector.Detect(stdError: false, upgrade: true);
 
         useProgress = supportsAnsi && !legacyConsole;
     }
 
     public static void Progress(ulong downloaded, ulong total)
     {
-        var progress = (byte)MathF.Round(downloaded / (float)total * 100.0f);
+        byte progress = (byte)MathF.Round(downloaded / (float)total * 100.0f);
         Progress(ProgressState.Default, progress);
     }
 

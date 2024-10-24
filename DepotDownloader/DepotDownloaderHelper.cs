@@ -47,13 +47,9 @@ public static class DepotDownloaderHelper
                 await ContentDownloader.DownloadAppAsync(appId, depotManifestIds, branch, null, null, "english", 
                         false, false).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is ContentDownloaderException or OperationCanceledException)
+            catch (Exception exception)
             {
-                Logger.Error(ex.Message);
-            }
-            catch (Exception e)
-            {
-                Logger.Error("Download failed to due to an unhandled exception: {0}", e.Message);
+                Logger.Error("Download failed to due to an unhandled exception: {0}", exception);
                 throw;
             }
             finally

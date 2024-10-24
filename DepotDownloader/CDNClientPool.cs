@@ -50,7 +50,7 @@ class CDNClientPool
     {
         try
         {
-            IReadOnlyCollection<Server> cdnServers = await this.steamSession.steamContent.GetServersForSteamPipe();
+            IReadOnlyCollection<Server> cdnServers = await steamSession.steamContent.GetServersForSteamPipe();
             if (cdnServers != null)
             {
                 return cdnServers;
@@ -58,7 +58,7 @@ class CDNClientPool
         }
         catch (Exception ex)
         {
-            DepotDownloaderHelper.Logger.Error("Failed to retrieve content server list: {0}", ex.Message);
+            Console.WriteLine("Failed to retrieve content server list: {0}", ex.Message);
         }
 
         return null;
