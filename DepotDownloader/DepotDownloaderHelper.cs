@@ -13,17 +13,18 @@ public static class DepotDownloaderHelper
 {
     public static readonly Logger Logger = 
         LogManager.Setup().LoadConfigurationFromFile("nlog.config").GetCurrentClassLogger();
-    
+
     /// <summary>
-    /// Downloads steam depot based on app id and depot id, can also specify manifest id for other veer
+    /// Downloads steam depot based on app id and depot id, can also specify manifest id
     /// </summary>
     /// <param name="appId"></param>
     /// <param name="depotManifests"></param>
     /// <param name="dir"></param>
     /// <param name="validate"></param>
+    /// <param name="maxDegreeOfParallelism"></param>
     /// <param name="branch"></param>
     public static async Task DownloadDepotAsync(uint appId, List<(uint, ulong)> depotManifests, string dir, bool validate, 
-        string branch = ContentDownloader.DEFAULT_BRANCH)
+        int maxDegreeOfParallelism, string branch = ContentDownloader.DEFAULT_BRANCH)
     {
         DebugLog.Enabled = false;
         
@@ -35,7 +36,7 @@ public static class DepotDownloaderHelper
         ContentDownloader.Config.InstallDirectory = dir;
         ContentDownloader.Config.VerifyAll = validate;
         ContentDownloader.Config.MaxServers = 20;
-        ContentDownloader.Config.MaxDownloads = 8;
+        ContentDownloader.Config.MaxDownloads = maxDegreeOfParallelism;
         ContentDownloader.Config.MaxServers = Math.Max(ContentDownloader.Config.MaxServers, ContentDownloader.Config.MaxDownloads);
 
         List<(uint depotId, ulong manifestId)> depotManifestIds = depotManifests;
