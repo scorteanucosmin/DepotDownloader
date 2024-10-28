@@ -42,8 +42,7 @@ namespace DepotDownloader
         {
             if (Loaded)
             {
-                DepotDownloaderHelper.Logger.Error("Account config already loaded");
-                throw new Exception("Account config already loaded");
+                return;
             }
 
             if (IsolatedStorage.FileExists(filename))
